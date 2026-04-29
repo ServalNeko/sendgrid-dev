@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"os"
 
+	model "github.com/ServalNeko/sendgrid-dev/model/v3/mail"
 	"github.com/labstack/echo"
-	model "github.com/yKanazawa/sendgrid-dev/model/v3/mail"
 )
 
 type ErrorResponse struct {
@@ -39,11 +39,12 @@ func PostSend() echo.HandlerFunc {
 			return c.JSON(http.StatusBadRequest, model.GetErrorResponse("Bad Request", nil, nil))
 		}
 
-		statusCode, errorResponse := postRequest.Validate()
+		statusCode, errorResponse, messageID := postRequest.Validate()
 		if statusCode != http.StatusAccepted {
 			return c.JSON(statusCode, errorResponse)
 		}
 
+		c.Response().Header().Set("X-Message-Id", messageID)
 		return c.String(http.StatusAccepted, "")
 	}
 }

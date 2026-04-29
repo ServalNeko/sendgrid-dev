@@ -1,6 +1,7 @@
 package send
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ServalNeko/sendgrid-dev/webhook"
 	"github.com/jordan-wright/email"
 	"gopkg.in/go-playground/validator.v9"
 )
@@ -33,6 +35,7 @@ type PostRequest struct {
 		} `json:"bcc"`
 		Substitutions map[string]string `json:"substitutions"`
 		Subject       string            `json:"subject"`
+		CustomArgs    map[string]string `json:"custom_args"`
 	} `json:"personalizations" validate:"required"`
 	From struct {
 		Email string `json:"email" validate:"required"`
@@ -42,8 +45,9 @@ type PostRequest struct {
 		Email string `json:"email"`
 		Name  string `json:"name"`
 	} `json:"reply_to"`
-	Subject string `json:"subject"`
-	Content []struct {
+	Subject    string            `json:"subject"`
+	CustomArgs map[string]string `json:"custom_args"`
+	Content    []struct {
 		Type  string `json:"type"`
 		Value string `json:"value"`
 	} `json:"content" validate:"required"`
@@ -68,7 +72,7 @@ func (postRequest *PostRequest) SetPostRequest(requestBody io.ReadCloser) error 
 	return json.NewDecoder(requestBody).Decode(&postRequest)
 }
 
-func (postRequest *PostRequest) Validate() (int, ErrorResponse) {
+func (postRequest *PostRequest) Validate() (int, ErrorResponse, string) {
 	validate := validator.New()
 	if err := validate.Struct(postRequest); err != nil {
 		for _, err := range err.(validator.ValidationErrors) {
@@ -81,21 +85,24 @@ func (postRequest *PostRequest) Validate() (int, ErrorResponse) {
 							"The personalizations field is required and must have at least one personalization.",
 							"personalizations",
 							"http://sendgrid.com/docs/API_Reference/Web_API_v3/Mail/errors.html#-Personalizations-Errors",
-						)
+						),
+						""
 				case "Email":
 					return http.StatusBadRequest,
 						GetErrorResponse(
 							"The from object must be provided for every email send. It is an object that requires the email parameter, but may also contain a name parameter.  e.g. {\"email\" : \"example@example.com\"}  or {\"email\" : \"example@example.com\", \"name\" : \"Example Recipient\"}.",
 							"from.email",
 							"http://sendgrid.com/docs/API_Reference/Web_API_v3/Mail/errors.html#message.from",
-						)
+						),
+						""
 				case "Content":
 					return http.StatusBadRequest,
 						GetErrorResponse(
 							"Unless a valid template_id is provided, the content parameter is required. There must be at least one defined content block. We typically suggest both text/plain and text/html blocks are included, but only one block is required.",
 							"content",
 							"http://sendgrid.com/docs/API_Reference/Web_API_v3/Mail/errors.html#message.content",
-						)
+						),
+						""
 				}
 			}
 		}
@@ -120,33 +127,59 @@ func GetErrorResponse(message string, field interface{}, help interface{}) Error
 	return errorJSON
 }
 
-// Send mail with SMTP
-func sendMailWithSMTP(postRequest PostRequest) (int, ErrorResponse) {
-	for _, personalizations := range postRequest.Personalizations {
+func generateMessageID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
+func mergeCustomArgs(base, override map[string]string) map[string]string {
+	if len(base) == 0 && len(override) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(base)+len(override))
+	for k, v := range base {
+		merged[k] = v
+	}
+	for k, v := range override {
+		merged[k] = v
+	}
+	return merged
+}
+
+// SMTP 経由でメールを送信する
+func sendMailWithSMTP(postRequest PostRequest) (int, ErrorResponse, string) {
+	messageID := generateMessageID()
+
+	for _, personalization := range postRequest.Personalizations {
 		e := email.NewEmail()
 
 		e.From = postRequest.From.Name + " <" + postRequest.From.Email + ">"
 
-		for _, to := range personalizations.To {
+		toEmails := make([]string, 0, len(personalization.To))
+		for _, to := range personalization.To {
 			e.To = append(e.To, getEmailwithName(to))
+			toEmails = append(toEmails, to.Email)
 		}
 
-		for _, cc := range personalizations.Cc {
+		for _, cc := range personalization.Cc {
 			e.Cc = append(e.Cc, getEmailwithName(cc))
 		}
 
-		for _, bcc := range personalizations.Bcc {
+		for _, bcc := range personalization.Bcc {
 			e.Bcc = append(e.Bcc, getEmailwithName(bcc))
 		}
 
-		replacements := make([]string, len(personalizations.Substitutions)*2)
-		for key, value := range personalizations.Substitutions {
+		replacements := make([]string, len(personalization.Substitutions)*2)
+		for key, value := range personalization.Substitutions {
 			replacements = append(replacements, key, value)
 		}
 		replacer := strings.NewReplacer(replacements...)
 
-		if personalizations.Subject != "" {
-			e.Subject = replacer.Replace(personalizations.Subject)
+		if personalization.Subject != "" {
+			e.Subject = replacer.Replace(personalization.Subject)
 		} else if postRequest.Subject != "" {
 			e.Subject = replacer.Replace(postRequest.Subject)
 		} else {
@@ -155,7 +188,8 @@ func sendMailWithSMTP(postRequest PostRequest) (int, ErrorResponse) {
 					"The subject is required. You can get around this requirement if you use a template with a subject defined or if every personalization has a subject defined.",
 					"subject",
 					"http://sendgrid.com/docs/API_Reference/Web_API_v3/Mail/errors.html#message.subject",
-				)
+				),
+				""
 		}
 
 		for _, content := range postRequest.Content {
@@ -175,35 +209,43 @@ func sendMailWithSMTP(postRequest PostRequest) (int, ErrorResponse) {
 						"The attachment content must be base64 encoded.",
 						"attachments."+strconv.Itoa(i)+".content",
 						"http://sendgrid.com/docs/API_Reference/Web_API_v3/Mail/errors.html#message.attachments.content",
-					)
+					),
+					""
 			}
 			e.AttachFile(filepath.Join(dirName, attachment.Filename))
 			i++
+		}
+
+		mergedArgs := mergeCustomArgs(postRequest.CustomArgs, personalization.CustomArgs)
+
+		if len(toEmails) > 0 {
+			webhook.SendEvents(messageID, toEmails, "processed", "", mergedArgs)
 		}
 
 		if os.Getenv("SENDGRID_DEV_TEST") == "1" {
 			continue
 		}
 
+		var smtpErr error
 		if len(os.Getenv("SENDGRID_DEV_SMTP_USERNAME")) > 0 {
 			arr := strings.Split(os.Getenv("SENDGRID_DEV_SMTP_SERVER"), ":")
-			e.Send(
+			smtpErr = e.Send(
 				os.Getenv("SENDGRID_DEV_SMTP_SERVER"),
-				smtp.PlainAuth(
-					"",
-					os.Getenv("SENDGRID_DEV_SMTP_USERNAME"),
-					os.Getenv("SENDGRID_DEV_SMTP_PASSWORD"),
-					arr[0],
-				),
+				smtp.PlainAuth("", os.Getenv("SENDGRID_DEV_SMTP_USERNAME"), os.Getenv("SENDGRID_DEV_SMTP_PASSWORD"), arr[0]),
 			)
+		} else {
+			smtpErr = e.Send(os.Getenv("SENDGRID_DEV_SMTP_SERVER"), nil)
 		}
 
-		e.Send(os.Getenv("SENDGRID_DEV_SMTP_SERVER"), nil)
+		if smtpErr == nil && len(toEmails) > 0 {
+			webhook.SendEvents(messageID, toEmails, "delivered", "250 OK", mergedArgs)
+		}
 	}
-	return http.StatusAccepted, GetErrorResponse("", nil, nil)
+
+	return http.StatusAccepted, GetErrorResponse("", nil, nil), messageID
 }
 
-// Get "Name <name@example.com>"
+// "名前 <email>" 形式の文字列を返す
 func getEmailwithName(t struct {
 	Email string `json:"email"`
 	Name  string `json:"name"`
@@ -211,7 +253,7 @@ func getEmailwithName(t struct {
 	return t.Name + " <" + t.Email + ">"
 }
 
-// Create attachment from base64 string
+// base64 文字列から添付ファイルを一時ディレクトリに書き出す
 func createAttachment(fileName string, base64Content string, i int) string {
 	data, err := base64.StdEncoding.DecodeString(base64Content)
 	if err != nil {

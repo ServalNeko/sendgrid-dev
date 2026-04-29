@@ -1,8 +1,8 @@
 package route
 
 import (
+	"github.com/ServalNeko/sendgrid-dev/api/v3/mail/send"
 	"github.com/labstack/echo"
-	"github.com/yKanazawa/sendgrid-dev/api/v3/mail/send"
 )
 
 func Init() *echo.Echo {

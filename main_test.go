@@ -1,12 +1,22 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
+
+	"github.com/ServalNeko/sendgrid-dev/route"
 	"github.com/steinfletcher/apitest"
-	"github.com/yKanazawa/sendgrid-dev/route"
 )
 
 func TestSend(t *testing.T) {
@@ -172,6 +182,7 @@ func TestSend(t *testing.T) {
 		Expect(t).
 		Body(``).
 		Status(http.StatusAccepted).
+		HeaderPresent("X-Message-Id").
 		End()
 
 	// OK (subject in personalizations)
@@ -197,6 +208,7 @@ func TestSend(t *testing.T) {
 		Expect(t).
 		Body(``).
 		Status(http.StatusAccepted).
+		HeaderPresent("X-Message-Id").
 		End()
 
 	// OK (duplicate subject (personalization priority))
@@ -223,6 +235,7 @@ func TestSend(t *testing.T) {
 		Expect(t).
 		Body(``).
 		Status(http.StatusAccepted).
+		HeaderPresent("X-Message-Id").
 		End()
 
 	// OK (multiple to, cc, bcc and reply-to with name)
@@ -271,6 +284,7 @@ func TestSend(t *testing.T) {
 		Expect(t).
 		Body(``).
 		Status(http.StatusAccepted).
+		HeaderPresent("X-Message-Id").
 		End()
 
 	// OK (multiple personalizations)
@@ -312,6 +326,7 @@ func TestSend(t *testing.T) {
 		Expect(t).
 		Body(``).
 		Status(http.StatusAccepted).
+		HeaderPresent("X-Message-Id").
 		End()
 
 	// OK (multiple personalizations with subject)
@@ -354,6 +369,7 @@ func TestSend(t *testing.T) {
 		Expect(t).
 		Body(``).
 		Status(http.StatusAccepted).
+		HeaderPresent("X-Message-Id").
 		End()
 
 	// OK (multiple personalizations with substitutions)
@@ -395,6 +411,7 @@ func TestSend(t *testing.T) {
 		Expect(t).
 		Body(``).
 		Status(http.StatusAccepted).
+		HeaderPresent("X-Message-Id").
 		End()
 
 	// OK (text/html)
@@ -420,6 +437,7 @@ func TestSend(t *testing.T) {
 		Expect(t).
 		Body(``).
 		Status(http.StatusAccepted).
+		HeaderPresent("X-Message-Id").
 		End()
 
 	// OK (multiple content text/plain, text/html)
@@ -448,6 +466,7 @@ func TestSend(t *testing.T) {
 		Expect(t).
 		Body(``).
 		Status(http.StatusAccepted).
+		HeaderPresent("X-Message-Id").
 		End()
 
 	// OK (attachements)
@@ -478,6 +497,7 @@ func TestSend(t *testing.T) {
 		Expect(t).
 		Body(``).
 		Status(http.StatusAccepted).
+		HeaderPresent("X-Message-Id").
 		End()
 
 	// OK (multiple attachements)
@@ -512,6 +532,7 @@ func TestSend(t *testing.T) {
 		Expect(t).
 		Body(``).
 		Status(http.StatusAccepted).
+		HeaderPresent("X-Message-Id").
 		End()
 
 	// NG (attachements content is not BASE64)
@@ -602,5 +623,278 @@ func TestSend(t *testing.T) {
 		Expect(t).
 		Body(``).
 		Status(http.StatusAccepted).
+		HeaderPresent("X-Message-Id").
 		End()
+
+	// OK (message-level custom_args)
+	apitest.New().
+		Handler(route.Init()).
+		Post("/v3/mail/send").
+		Headers(map[string]string{"Authorization": "Bearer " + os.Getenv("SENDGRID_DEV_API_KEY")}).
+		JSON(`{
+			"personalizations": [{
+				"to": [{
+					"email": "to@example.com"
+				}]
+			}],
+			"from": {
+				"email": "from@example.com"
+			},
+			"subject": "Subject",
+			"content": [{
+				"type": "text/plain",
+				"value": "Content"
+			}],
+			"custom_args": {
+				"userid": "1234",
+				"env": "test"
+			}
+		}`).
+		Expect(t).
+		Body(``).
+		Status(http.StatusAccepted).
+		HeaderPresent("X-Message-Id").
+		End()
+
+	// OK (personalization-level custom_args overrides message-level)
+	apitest.New().
+		Handler(route.Init()).
+		Post("/v3/mail/send").
+		Headers(map[string]string{"Authorization": "Bearer " + os.Getenv("SENDGRID_DEV_API_KEY")}).
+		JSON(`{
+			"personalizations": [{
+				"to": [{
+					"email": "to@example.com"
+				}],
+				"custom_args": {
+					"userid": "9999"
+				}
+			}],
+			"from": {
+				"email": "from@example.com"
+			},
+			"subject": "Subject",
+			"content": [{
+				"type": "text/plain",
+				"value": "Content"
+			}],
+			"custom_args": {
+				"userid": "1234",
+				"env": "test"
+			}
+		}`).
+		Expect(t).
+		Body(``).
+		Status(http.StatusAccepted).
+		HeaderPresent("X-Message-Id").
+		End()
+}
+
+func TestEventWebhook(t *testing.T) {
+	os.Setenv("SENDGRID_DEV_TEST", "1")
+	defer os.Unsetenv("SENDGRID_DEV_EVENT_WEBHOOK_URL")
+
+	// processed イベントが受信されること
+	t.Run("processed イベント", func(t *testing.T) {
+		received := make(chan []byte, 1)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			received <- body
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+		os.Setenv("SENDGRID_DEV_EVENT_WEBHOOK_URL", srv.URL)
+
+		apitest.New().
+			Handler(route.Init()).
+			Post("/v3/mail/send").
+			Headers(map[string]string{"Authorization": "Bearer " + os.Getenv("SENDGRID_DEV_API_KEY")}).
+			JSON(`{
+				"personalizations": [{
+					"to": [{"email": "to@example.com"}]
+				}],
+				"from": {"email": "from@example.com"},
+				"subject": "Subject",
+				"content": [{"type": "text/plain", "value": "Content"}]
+			}`).
+			Expect(t).
+			Status(http.StatusAccepted).
+			End()
+
+		select {
+		case body := <-received:
+			var events []map[string]interface{}
+			if err := json.Unmarshal(body, &events); err != nil {
+				t.Fatalf("Webhook ペイロードのパース失敗: %v", err)
+			}
+			if len(events) != 1 {
+				t.Fatalf("イベント数: got %d, want 1", len(events))
+			}
+			if events[0]["event"] != "processed" {
+				t.Errorf("event: got %v, want processed", events[0]["event"])
+			}
+			if events[0]["email"] != "to@example.com" {
+				t.Errorf("email: got %v, want to@example.com", events[0]["email"])
+			}
+			if events[0]["sg_message_id"] == "" {
+				t.Error("sg_message_id が空")
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("2秒以内に Webhook が受信されなかった")
+		}
+	})
+
+	// custom_args がトップレベルに展開されること
+	t.Run("custom_args 展開", func(t *testing.T) {
+		received := make(chan []byte, 1)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			received <- body
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+		os.Setenv("SENDGRID_DEV_EVENT_WEBHOOK_URL", srv.URL)
+
+		apitest.New().
+			Handler(route.Init()).
+			Post("/v3/mail/send").
+			Headers(map[string]string{"Authorization": "Bearer " + os.Getenv("SENDGRID_DEV_API_KEY")}).
+			JSON(`{
+				"personalizations": [{
+					"to": [{"email": "to@example.com"}],
+					"custom_args": {"userid": "9999"}
+				}],
+				"from": {"email": "from@example.com"},
+				"subject": "Subject",
+				"content": [{"type": "text/plain", "value": "Content"}],
+				"custom_args": {"userid": "1234", "env": "test"}
+			}`).
+			Expect(t).
+			Status(http.StatusAccepted).
+			End()
+
+		select {
+		case body := <-received:
+			var events []map[string]interface{}
+			if err := json.Unmarshal(body, &events); err != nil {
+				t.Fatalf("Webhook ペイロードのパース失敗: %v", err)
+			}
+			// personalization の custom_args がメッセージレベルを上書き
+			if events[0]["userid"] != "9999" {
+				t.Errorf("userid: got %v, want 9999", events[0]["userid"])
+			}
+			// メッセージレベルのみのキーは引き継がれる
+			if events[0]["env"] != "test" {
+				t.Errorf("env: got %v, want test", events[0]["env"])
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("2秒以内に Webhook が受信されなかった")
+		}
+	})
+
+	// 複数受信者に対してそれぞれイベントが生成されること
+	t.Run("複数受信者", func(t *testing.T) {
+		received := make(chan []byte, 1)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			received <- body
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+		os.Setenv("SENDGRID_DEV_EVENT_WEBHOOK_URL", srv.URL)
+
+		apitest.New().
+			Handler(route.Init()).
+			Post("/v3/mail/send").
+			Headers(map[string]string{"Authorization": "Bearer " + os.Getenv("SENDGRID_DEV_API_KEY")}).
+			JSON(`{
+				"personalizations": [{
+					"to": [
+						{"email": "to1@example.com"},
+						{"email": "to2@example.com"}
+					]
+				}],
+				"from": {"email": "from@example.com"},
+				"subject": "Subject",
+				"content": [{"type": "text/plain", "value": "Content"}]
+			}`).
+			Expect(t).
+			Status(http.StatusAccepted).
+			End()
+
+		select {
+		case body := <-received:
+			var events []map[string]interface{}
+			if err := json.Unmarshal(body, &events); err != nil {
+				t.Fatalf("Webhook ペイロードのパース失敗: %v", err)
+			}
+			if len(events) != 2 {
+				t.Fatalf("イベント数: got %d, want 2", len(events))
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("2秒以内に Webhook が受信されなかった")
+		}
+	})
+}
+
+func TestSignedEventWebhook(t *testing.T) {
+	os.Setenv("SENDGRID_DEV_TEST", "1")
+	defer os.Unsetenv("SENDGRID_DEV_EVENT_WEBHOOK_URL")
+	defer os.Unsetenv("SENDGRID_DEV_EVENT_WEBHOOK_SIGNING_KEY")
+
+	// テスト用 ECDSA P-256 鍵ペアを生成
+	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("鍵生成失敗: %v", err)
+	}
+	privBytes, err := x509.MarshalECPrivateKey(privKey)
+	if err != nil {
+		t.Fatalf("秘密鍵シリアライズ失敗: %v", err)
+	}
+	pemBlock := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: privBytes})
+	os.Setenv("SENDGRID_DEV_EVENT_WEBHOOK_SIGNING_KEY", string(pemBlock))
+
+	type capturedReq struct {
+		body      []byte
+		signature string
+		timestamp string
+	}
+	received := make(chan capturedReq, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		received <- capturedReq{
+			body:      body,
+			signature: r.Header.Get("X-Twilio-Email-Event-Webhook-Signature"),
+			timestamp: r.Header.Get("X-Twilio-Email-Event-Webhook-Timestamp"),
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	os.Setenv("SENDGRID_DEV_EVENT_WEBHOOK_URL", srv.URL)
+
+	apitest.New().
+		Handler(route.Init()).
+		Post("/v3/mail/send").
+		Headers(map[string]string{"Authorization": "Bearer " + os.Getenv("SENDGRID_DEV_API_KEY")}).
+		JSON(`{
+			"personalizations": [{"to": [{"email": "to@example.com"}]}],
+			"from": {"email": "from@example.com"},
+			"subject": "Subject",
+			"content": [{"type": "text/plain", "value": "Content"}]
+		}`).
+		Expect(t).
+		Status(http.StatusAccepted).
+		End()
+
+	select {
+	case req := <-received:
+		if req.signature == "" {
+			t.Error("X-Twilio-Email-Event-Webhook-Signature ヘッダーがない")
+		}
+		if req.timestamp == "" {
+			t.Error("X-Twilio-Email-Event-Webhook-Timestamp ヘッダーがない")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("2秒以内に Signed Webhook が受信されなかった")
+	}
 }

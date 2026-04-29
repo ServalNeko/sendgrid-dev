@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/yKanazawa/sendgrid-dev/route"
+	"github.com/ServalNeko/sendgrid-dev/route"
 )
 
 func main() {

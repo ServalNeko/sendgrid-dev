@@ -1,4 +1,4 @@
-module github.com/yKanazawa/sendgrid-dev
+module github.com/ServalNeko/sendgrid-dev
 
 go 1.26.2
 
