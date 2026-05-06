@@ -1,0 +1,23 @@
+services:
+  sendgrid-dev:
+    build: .
+    ports:
+      - "3030:3030"   # sendgrid-dev API
+      - "1025:1025"   # maildev SMTP（外部ツールからの接続用）
+      - "1080:1080"   # maildev Web UI
+    environment:
+      SENDGRID_DEV_API_SERVER: ":3030"
+      SENDGRID_DEV_API_KEY: "SG.xxxxx"
+      SENDGRID_DEV_SMTP_SERVER: "127.0.0.1:1025"
+      # SENDGRID_DEV_SMTP_USERNAME: ""
+      # SENDGRID_DEV_SMTP_PASSWORD: ""
+      # SENDGRID_DEV_EVENT_WEBHOOK_URL: ""
+      # SENDGRID_DEV_EVENT_WEBHOOK_SIGNING_KEY: ""
+      # maildev ポートを変えたい場合は EXPOSE も変えること
+      # MAILDEV_SMTP_PORT: "1025"
+      # MAILDEV_WEB_PORT: "1080"
+    restart: unless-stopped
+    # Linux でホスト OS 宛に Webhook を送る場合に必要
+    # Mac / Windows では不要（host.docker.internal が自動で解決される）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
