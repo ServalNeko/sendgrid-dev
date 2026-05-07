@@ -2,6 +2,8 @@
 
 SendGrid Dev は開発中の SendGrid メール送信をテストするためのモック API です。
 
+Docker Hub: https://hub.docker.com/r/servalneko/sendgrid-dev
+
 このプロジェクトは [yKanazawa/sendgrid-dev](https://github.com/yKanazawa/sendgrid-dev) をフォークし、以下の機能を追加したものです：
 
 - Docker Compose サポート（MailDev 同梱）
