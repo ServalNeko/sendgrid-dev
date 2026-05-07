@@ -9,7 +9,6 @@ import (
 	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -99,21 +98,19 @@ func postWebhook(webhookURL string, body []byte) {
 	defer resp.Body.Close()
 }
 
-// loadSigningKey は SENDGRID_DEV_EVENT_WEBHOOK_SIGNING_KEY（PEM形式）から ECDSA P-256 秘密鍵を読み込む。
+// loadSigningKey は SENDGRID_DEV_EVENT_WEBHOOK_SIGNING_KEY（Base64 DER形式）から ECDSA P-256 秘密鍵を読み込む。
 // 環境変数が空の場合は nil を返す。
 func loadSigningKey() *ecdsa.PrivateKey {
 	keyStr := os.Getenv("SENDGRID_DEV_EVENT_WEBHOOK_SIGNING_KEY")
 	if keyStr == "" {
 		return nil
 	}
-	// 環境変数内の "\n" リテラルを改行に変換
-	keyStr = strings.ReplaceAll(keyStr, `\n`, "\n")
-	block, _ := pem.Decode([]byte(keyStr))
-	if block == nil {
-		fmt.Println("Event webhook: 署名鍵の PEM デコード失敗")
+	der, err := base64.StdEncoding.DecodeString(strings.TrimSpace(keyStr))
+	if err != nil {
+		fmt.Println("Event webhook: 署名鍵の Base64 デコード失敗:", err)
 		return nil
 	}
-	key, err := x509.ParseECPrivateKey(block.Bytes)
+	key, err := x509.ParseECPrivateKey(der)
 	if err != nil {
 		fmt.Println("Event webhook: 署名鍵のパース失敗:", err)
 		return nil
