@@ -32,11 +32,51 @@ SendGrid Dev は開発中の SendGrid メール送信をテストするための
 
 最も簡単な起動方法です。sendgrid-dev と MailDev をまとめて起動します。
 
+Docker Hub のイメージを使う場合は `compose.yml` の `build: .` を以下に置き換えてください：
+
+```yaml
+image: servalneko/sendgrid-dev:latest
+```
+
+または直接 pull して起動：
+
+```bash
+docker pull servalneko/sendgrid-dev
+docker compose up
+```
+
+ソースからビルドする場合：
+
 ```bash
 docker compose up --build
 ```
 
-必要に応じて `compose.yml` の環境変数を編集してください。
+**compose.yml の例：**
+
+```yaml
+services:
+  sendgrid-dev:
+    image: servalneko/sendgrid-dev:latest
+    ports:
+      - "3030:3030"   # sendgrid-dev API
+      - "1025:1025"   # maildev SMTP（外部ツールからの接続用）
+      - "1080:1080"   # maildev Web UI
+    environment:
+      SENDGRID_DEV_API_SERVER: ":3030"
+      SENDGRID_DEV_API_KEY: "SG.xxxxx"
+      SENDGRID_DEV_SMTP_SERVER: "127.0.0.1:1025"
+      # SENDGRID_DEV_SMTP_USERNAME: ""
+      # SENDGRID_DEV_SMTP_PASSWORD: ""
+      # SENDGRID_DEV_EVENT_WEBHOOK_URL: "http://host.docker.internal:8080/webhook/event"
+      # SENDGRID_DEV_EVENT_WEBHOOK_SIGNING_KEY: "<Base64 DER形式の秘密鍵>"
+    restart: unless-stopped
+    # Linux でホスト OS 宛に Webhook を送る場合に必要
+    # Mac / Windows では不要（host.docker.internal が自動で解決される）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+```
+
+必要に応じて環境変数を編集してください。
 
 ホスト上のサービスに Event Webhook を送る場合：
 
