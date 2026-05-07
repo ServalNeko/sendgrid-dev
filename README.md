@@ -147,6 +147,17 @@ MailTrap Inbox で確認：https://mailtrap.io/inboxes
 
 鍵は `x509.MarshalECPrivateKey` の出力を `base64.StdEncoding` でエンコードした Base64 DER 形式で指定します。
 
+すぐに試せる開発用サンプルキー（**本番環境では使用しないこと**）：
+
+- 秘密鍵（`SENDGRID_DEV_EVENT_WEBHOOK_SIGNING_KEY` に設定）:
+  ```
+  MHcCAQEEIHJBOykoA+cB66RIcRlneKyD4d45dDl55QjcobEqfVdtoAoGCCqGSM49AwEHoUQDQgAEKh/Mhg3ZZpkQbilFV8qlmIs/w6oFUf+Q72V9CtXD6Tpb5XkemM1L5MCA8LCsD86Eust87a88g27ASnih+DAJtw==
+  ```
+- 公開鍵（署名検証側で使用）:
+  ```
+  MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEKh/Mhg3ZZpkQbilFV8qlmIs/w6oFUf+Q72V9CtXD6Tpb5XkemM1L5MCA8LCsD86Eust87a88g27ASnih+DAJtw==
+  ```
+
 ## テスト
 
 ```
